@@ -17,11 +17,9 @@ code review skills are natural next additions.
 
 ## Using a skill from this repo
 
-### Option A: copy it in directly (works today, no auth needed)
+This repo is public, so both paths below work with no credential setup.
 
-This repo is private, so the marketplace flow below requires git credentials
-for a private remote. The zero-friction path is to just copy the skill
-directory you want:
+### Option A: copy it in directly
 
 ```sh
 git clone https://github.com/zalegrala/go-hygiene-skills.git
@@ -34,24 +32,18 @@ Claude Code auto-discovers `SKILL.md` files placed under `~/.claude/skills/`
 (all projects) or `<project>/.claude/skills/` (that project only, if
 committed). No plugin prefix is needed for skills installed this way — it's
 invoked as `/tracing-hygiene` or triggers automatically when the description
-matches.
+matches. This is the simplest path, and won't auto-update — re-copy to pick
+up changes.
 
-### Option B: install as a plugin (if you want the marketplace flow)
+### Option B: install as a plugin
 
 ```sh
 /plugin marketplace add zalegrala/go-hygiene-skills
 /plugin install go-hygiene-skills@go-hygiene-skills
 ```
 
-For a private repo, this requires git credentials configured for
-`github.com/zalegrala/go-hygiene-skills`, e.g.:
-
-```sh
-git config --global url."https://x-access-token:YOUR_GITHUB_TOKEN@github.com/zalegrala/go-hygiene-skills".insteadOf \
-  "https://github.com/zalegrala/go-hygiene-skills"
-```
-
-Skills installed this way are namespaced: `go-hygiene-skills:tracing-hygiene`.
+Skills installed this way are namespaced (`go-hygiene-skills:tracing-hygiene`)
+and can be updated later via `/plugin marketplace update`.
 
 ## Adding a new skill to this repo
 
