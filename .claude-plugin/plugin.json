@@ -1,0 +1,11 @@
+{
+  "name": "go-hygiene-skills",
+  "description": "Go production-code hygiene skills for Claude Code, starting with tracing hygiene (OpenTelemetry span discipline).",
+  "version": "0.1.0",
+  "author": {
+    "name": "zalegrala"
+  },
+  "homepage": "https://github.com/zalegrala/go-hygiene-skills",
+  "repository": "https://github.com/zalegrala/go-hygiene-skills",
+  "license": "MIT"
+}

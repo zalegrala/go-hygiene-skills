@@ -1,0 +1,13 @@
+{
+  "name": "go-hygiene-skills",
+  "owner": {
+    "name": "zalegrala"
+  },
+  "plugins": [
+    {
+      "name": "go-hygiene-skills",
+      "source": ".",
+      "description": "Go production-code hygiene skills for Claude Code, starting with tracing hygiene (OpenTelemetry span discipline)."
+    }
+  ]
+}
