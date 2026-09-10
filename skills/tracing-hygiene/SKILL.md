@@ -1,17 +1,20 @@
 ---
 name: tracing-hygiene
-description: Use when auditing or fixing Go code instrumented with OpenTelemetry where spans are created inside a loop (traces exploding to hundreds/thousands of spans for bulk or batch processing) or where error-returning functions never mark their span as errored (missing SetStatus/RecordError), making traces unreliable to query or trust for both humans and automated analysis.
+description: Use when auditing or fixing Go code instrumented with OpenTelemetry — spans created inside a loop (traces exploding to hundreds/thousands of spans for bulk or batch processing), error-returning functions that never mark their span as errored (missing SetStatus/RecordError), or an operation with real internal structure that has no span at all, making traces unreliable to query or trust for both humans and automated analysis.
 ---
 
 # Tracing Hygiene (Go / OpenTelemetry)
 
 ## Overview
 
-Two specific defects make Go traces unusable: creating a span per loop
-iteration (span-count explosion), and creating a span that can fail but never
-marking it errored (silent failures in traces). Both have a small, mechanical
-fix. See `references/patterns.md` for the full before/after and the decision
-between a count attribute vs. a span event when collapsing a loop.
+Tracing hygiene isn't only about removing spans — it's about improving the
+signal. Three defects covered here: creating a span per loop iteration
+(span-count explosion), creating a span that can fail but never marking it
+errored (silent failures in traces), and an operation worth isolating that
+has no span at all (missing signal). The first two have a small, mechanical
+fix; the third needs judgment about the surrounding code, not a mechanical
+rule. See `references/patterns.md` for full before/afters and decision
+guidance.
 
 ## When to use
 
@@ -31,7 +34,9 @@ converting `func f() error` to `func f() (err error)`). Nothing else.
 This constraint exists so the resulting change is a small, reviewable,
 tracing-only PR a team can merge with confidence that behavior didn't
 change. It holds even when other cleanup is visible, tempting, or explicitly
-invited ("clean up anything else you notice").
+invited ("clean up anything else you notice"). Adding a *new* span (Pattern
+3) is still in scope — it's a tracing/instrumentation statement — as long as
+nothing else in the diff moves.
 
 | Rationalization | Reality |
 |---|---|
@@ -50,27 +55,46 @@ to a defer.
 
 | Detector | Symptom | Fix |
 |---|---|---|
-| Span-per-loop-iteration | `tracer.Start` inside a `for`/`range` body, or inside a goroutine launched from one | One span around the loop; count attribute if per-item identity has no debugging value, span event per iteration if it does. See patterns.md Pattern 1. |
-| Missing/incomplete span error status | Function can return non-nil error but no `SetStatus(codes.Error, ...)`; or `RecordError` without `SetStatus`; or no explicit `codes.Ok` on success | One `defer` right after span creation using `references/error-helper.go`'s `RecordErr`, reusing/exposing the function's `err`. See patterns.md Pattern 2. |
+| Span-per-loop-iteration | `tracer.Start` inside a `for`/`range` body or a goroutine launched from one, **or** reachable exactly once per iteration through a callback one or more calls away from the loop (e.g. a `blockFn`/closure the loop invokes) | One span around the loop; count attribute if per-item identity has no debugging value, span event per iteration if it does. **First check the correctness gate below** — this is the fix most likely to be unsafe to apply mechanically. See patterns.md Pattern 1. |
+| Missing/incomplete span error status | Function can return non-nil error but no `SetStatus(codes.Error, ...)`; or `RecordError` without `SetStatus`; or no explicit `codes.Ok` on success; or the error surfaces via a side-effecting callback (e.g. `handleErr(err)`) instead of a return value | One `defer` right after span creation using `references/error-helper.go`'s `RecordErr`, reusing/exposing the function's `err` (name it `_` if there's already a local named `err`/`resp` to avoid collisions) — or, for the side-effecting-callback shape, a direct (non-deferred) `RecordErr(span, err)` call at the site where `err` is known. See patterns.md Pattern 2. |
+| Missing span for an operation with real internal structure | An error-returning function does meaningful, isolable work but has no span at all, inconsistent with sibling functions that do | **Propose**, don't mechanically apply, a new span — gated on whether it would add signal (see the value gate in patterns.md Pattern 3). Always surface for explicit review; never batch-apply like the other two. |
 
 ## Workflow
 
-1. **Audit**: scan the target package(s) for both detectors (grep for
-   `tracer.Start`/`.Start(ctx` near `for `/`range `; grep for `defer
-   span.End()` sites without a matching `SetStatus` in the same function).
-   Bucket findings by package and pattern.
+1. **Audit**: scan the target package(s) for all three detectors (grep for
+   `tracer.Start`/`.Start(ctx` near `for `/`range ` *and* trace call graphs
+   through loop-invoked callbacks; grep for `defer span.End()` sites without
+   a matching `SetStatus` in the same function; note functions with real
+   internal structure and no span at all, especially next to siblings that
+   have one). Bucket findings by package and pattern.
 2. **Report** findings with file:line and which detector matched, before
-   changing anything.
-3. **Apply on request**, one bucket at a time, respecting the tracing-only
-   constraint above. Skip and flag (don't force) any site where the fix
-   would require non-trivial control-flow changes — e.g. an `err` shadowed
-   in a nested block that can't be exposed to a defer without restructuring.
-4. Keep each applied bucket small enough to be its own PR (e.g. "tracing
+   changing anything. For Pattern-1 candidates, note in the report whether
+   the correctness gate (below) passed. For Pattern-3 candidates, note the
+   value-gate reasoning (children/attributes/call-frequency) up front — this
+   is a proposal, not a foregone fix.
+3. **Correctness gate for Pattern 1 — check before collapsing, not after:**
+   grep the whole function (and anything it calls with the per-iteration
+   `ctx`) for `SpanFromContext(ctx)` or a nested `tracer.Start` reached
+   through that `ctx`. If either exists, collapsing the per-iteration span
+   changes what those consumers attach to or parent onto — a behavior
+   change hiding behind what looks like "just tracing." Skip and flag
+   instead of forcing it.
+4. **Apply on request**: Pattern 1 and 2 fixes, one bucket at a time,
+   respecting the tracing-only constraint above. Skip and flag (don't
+   force) any site where the fix would require non-trivial control-flow
+   changes — e.g. an `err` shadowed in a nested block, or a panic-recovery
+   `defer` declared before the `span` variable it would need to close over
+   (same rule: reordering to make it fit is out of scope, flag instead).
+   Pattern 3 proposals are applied only one at a time, after the team
+   confirms the specific instance is worth the added span.
+5. Keep each applied bucket small enough to be its own PR (e.g. "tracing
    hygiene: collapse loop spans in `livestore`").
 
 ## Reference files
 
-- `references/patterns.md` — detailed before/after for both detectors, the
-  count-attribute-vs-span-event decision, and the shadowed-`err` caveat.
+- `references/patterns.md` — detailed before/after for all three patterns,
+  the correctness gate, the count-attribute-vs-span-event decision, the
+  shadowed-`err` and panic-recovery-ordering caveats, and the Pattern 3
+  value gate.
 - `references/error-helper.go` — the local helper to copy into the target
   repo (not a dependency to import) combining `RecordError` + `SetStatus`.
